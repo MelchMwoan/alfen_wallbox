@@ -1577,6 +1577,9 @@ class AlfenDeviceInfo:
         self.firmware_version = response["FWVersion"]
         self.model_id = response["Model"]
 
-        self.model = ALFEN_PRODUCT_MAP.get(self.model_id, self.model_id)
+        if self.model_id in NEW_AUTH_MAPPING:
+            self.model = NEW_AUTH_MAPPING[self.model_id]
+        else:
+            self.model = ALFEN_PRODUCT_MAP.get(self.model_id, self.model_id)
         self.object_id = response["ObjectId"]
         self.type = response["Type"]
