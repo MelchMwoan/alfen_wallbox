@@ -455,6 +455,22 @@ async def test_sensor_missing_property(mock_entry, mock_coordinator):
     assert value is None
 
 
+async def test_sensor_none_property_value(mock_entry, mock_coordinator):
+    """Test sensor with a present property that has no value yet."""
+    mock_coordinator.device.properties["5221_3"] = {
+        ID: "5221_3",
+        VALUE: None,
+        "cat": "meter2",
+    }
+
+    description = next(d for d in ALFEN_SENSOR_TYPES if d.key == "smart_meter_voltage_l1")
+    entity = AlfenSensor(mock_entry, description)
+
+    value = entity.native_value
+
+    assert value is None
+
+
 async def test_sensor_dict_lookup_invalid_value(mock_entry, mock_coordinator):
     """Test dict lookup with invalid value."""
     mock_coordinator.device.properties["2501_2"] = {

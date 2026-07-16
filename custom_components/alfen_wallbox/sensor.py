@@ -1742,6 +1742,9 @@ class AlfenMainSensor(AlfenEntity):
                 if prop[ID] == "2501_2":
                     return STATUS_DICT.get(prop[VALUE], "Unknown")
 
+                if prop[VALUE] is None:
+                    return None
+
                 if self.entity_description.round_digits is not None:
                     return round(prop[VALUE], self.entity_description.round_digits)
 
@@ -2114,6 +2117,8 @@ class AlfenSensor(AlfenEntity, SensorEntity):
         if self.entity_description.api_param in self.coordinator.device.properties:
             prop = self.coordinator.device.properties[self.entity_description.api_param]
             # some exception of return value
+            if prop[VALUE] is None:
+                return None
 
             # Display state status
             if self.entity_description.api_param in ("3190_1", "3191_1"):

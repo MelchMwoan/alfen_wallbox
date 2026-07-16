@@ -1029,9 +1029,11 @@ class AlfenDevice:
         needs_auth = False
         async with self._lock:
             try:
+                # TODO: if this works, check if this doesn't break NG9 chargers
+                payload = {api_param: {ID: api_param, VALUE: value}}
                 async with self._session.post(
                     url=self.__get_url(PROP),
-                    json={api_param: {ID: api_param, VALUE: str(value)}},
+                    data=json.dumps(payload),
                     headers=self._request_headers(include_json=True),
                     timeout=ClientTimeout(total=DEFAULT_TIMEOUT),
                     ssl=self.ssl,

@@ -584,6 +584,29 @@ async def test_post_json_decode_error_trailing_comma(alfen_device: AlfenDevice, 
     assert result is None
 
 
+async def test_update_value_uses_native_json_types(alfen_device: AlfenDevice, mock_session):
+    """Test that value updates keep the native JSON type."""
+    alfen_device.logged_in = True
+    alfen_device.uses_token_auth = True
+    alfen_device.access_token = "access-token"
+
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.raise_for_status = MagicMock()
+
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    mock_session.post = MagicMock(return_value=mock_ctx)
+
+    result = await alfen_device._update_value("2064_0", 0, allowed_login=False)
+
+    assert result is True
+    assert json.loads(mock_session.post.call_args.kwargs["data"]) == {
+        "2064_0": {ID: "2064_0", VALUE: 0}
+    }
+
+
 async def test_set_green_share(alfen_device: AlfenDevice):
     """Test setting green share percentage."""
     await alfen_device.set_green_share(75)
