@@ -101,20 +101,119 @@ async def test_device_init_failure(alfen_device: AlfenDevice, mock_session):
 
 async def test_login(alfen_device: AlfenDevice):
     """Test login operation."""
-    with patch.object(alfen_device, "_post", new=AsyncMock(return_value={"success": True})):
-        await alfen_device.login()
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(return_value={"success": True})
 
-        assert alfen_device.logged_in is True
-        assert alfen_device.keep_logout is False
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    alfen_device._session.post = MagicMock(return_value=mock_ctx)
+
+    await alfen_device.login()
+
+    assert alfen_device.logged_in is True
+    assert alfen_device.keep_logout is False
+    assert alfen_device.access_token is None
+
+
+async def test_login_new_auth_stores_tokens(alfen_device: AlfenDevice):
+    """Test token-based login stores bearer tokens and uses the fixed display name."""
+    alfen_device.info = MagicMock(model_id="AHP02-63026")
+    alfen_device._update_auth_mode()
+
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(
+        return_value={"access": "access-token", "refresh": "refresh-token"}
+    )
+
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    alfen_device._session.post = MagicMock(return_value=mock_ctx)
+
+    await alfen_device.login()
+
+    assert alfen_device.logged_in is True
+    assert alfen_device.uses_token_auth is True
+    assert alfen_device.access_token == "access-token"
+    assert alfen_device.refresh_token == "refresh-token"
+
+    login_call = alfen_device._session.post.call_args
+    assert login_call is not None
+    assert login_call.kwargs["json"]["displayname"] == "HomeAssistant"
+    assert login_call.kwargs["headers"] == {"Content-Type": "application/json"}
 
 
 async def test_logout(alfen_device: AlfenDevice):
     """Test logout operation."""
-    with patch.object(alfen_device, "_post", new=AsyncMock(return_value={"success": True})):
-        await alfen_device.logout()
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(return_value={"success": True})
 
-        assert alfen_device.logged_in is False
-        assert alfen_device.keep_logout is True
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    alfen_device._session.post = MagicMock(return_value=mock_ctx)
+
+    await alfen_device.logout()
+
+    assert alfen_device.logged_in is False
+    assert alfen_device.keep_logout is True
+
+
+async def test_token_auth_requests_include_bearer_header(alfen_device: AlfenDevice, mock_session):
+    """Test that token-based auth adds a bearer header to API requests."""
+    alfen_device.uses_token_auth = True
+    alfen_device.logged_in = True
+    alfen_device.access_token = "access-token"
+
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(return_value={"result": "success"})
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=None)
+
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    mock_session.get = MagicMock(return_value=mock_ctx)
+
+    result = await alfen_device._get("https://192.168.1.100/api/test")
+
+    assert result == {"result": "success"}
+    assert mock_session.get.call_args.kwargs["headers"]["Authorization"] == "Bearer access-token"
+
+
+async def test_token_auth_logout_uses_bearer_header(alfen_device: AlfenDevice, mock_session):
+    """Test that token-based auth sends bearer auth on logout."""
+    alfen_device.uses_token_auth = True
+    alfen_device.logged_in = True
+    alfen_device.access_token = "access-token"
+
+    mock_response = MagicMock()
+    mock_response.status = 200
+    mock_response.headers = {}
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json = AsyncMock(return_value={"success": True})
+
+    mock_ctx = MagicMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_ctx.__aexit__ = AsyncMock(return_value=None)
+    mock_session.post = MagicMock(return_value=mock_ctx)
+
+    await alfen_device.logout()
+
+    assert mock_session.post.call_args.kwargs["headers"]["Authorization"] == "Bearer access-token"
+    assert alfen_device.access_token is None
 
 
 async def test_set_value_queues_update(alfen_device: AlfenDevice):
@@ -670,17 +769,23 @@ async def test_login_exception_handling(alfen_device: AlfenDevice):
 
     # Should not crash, logged_in remains False
     assert alfen_device.logged_in is False
+    assert alfen_device.access_token is None
 
 
 async def test_logout_exception_handling(alfen_device: AlfenDevice):
     """Test logout error handling."""
     alfen_device.logged_in = True
 
-    with patch.object(alfen_device, "_post", new=AsyncMock(side_effect=Exception("Logout failed"))):
-        await alfen_device.logout()
+    mock_post_ctx = MagicMock()
+    mock_post_ctx.__aenter__ = AsyncMock(side_effect=Exception("Logout failed"))
+    mock_post_ctx.__aexit__ = AsyncMock(return_value=None)
+    alfen_device._session.post = MagicMock(return_value=mock_post_ctx)
 
-        # Should still set keep_logout
-        assert alfen_device.keep_logout is True
+    await alfen_device.logout()
+
+    # Should still set keep_logout and clear auth state
+    assert alfen_device.keep_logout is True
+    assert alfen_device.logged_in is False
 
 
 async def test_get_all_properties_string_response(alfen_device: AlfenDevice):

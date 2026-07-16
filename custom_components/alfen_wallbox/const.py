@@ -155,6 +155,11 @@ ALFEN_PRODUCT_MAP = {
     "NG920-61216": "Eve Double Pro-line FR, 1 phase, Display, 2x socket Type 2S (shutters), max. 2x32A input current",
 }
 
+# Model IDs that use the newer token-based authentication flow.
+NEW_AUTH_MAPPING = {
+    "AHP02-63026": "Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
+}
+
 LICENSE_NONE = "None"
 LICENSE_SCN = "LoadBalancing_SCN"
 LICENSE_LOAD_BALANCING_STATIC = "LoadBalancing_Static"

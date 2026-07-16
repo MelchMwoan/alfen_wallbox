@@ -38,6 +38,7 @@ from .const import (
     LOGOUT,
     METHOD_GET,
     OFFSET,
+    NEW_AUTH_MAPPING,
     PARAM_COMMAND,
     PARAM_DISPLAY_NAME,
     PARAM_PASSWORD,
@@ -98,6 +99,9 @@ class AlfenDevice:
         self.properties: dict[str, Any] = {}
         # SSL verification is handled via ssl parameter in each request, not session attribute
         self.keep_logout = False
+        self.access_token: str | None = None
+        self.refresh_token: str | None = None
+        self.uses_token_auth = False
         self.max_allowed_phases = 1
         self.latest_tag: dict[tuple[str, str, str], Any] | None = None
         self.transaction_offset = 0
@@ -130,7 +134,12 @@ class AlfenDevice:
 
     async def init(self) -> bool:
         """Initialize the Alfen API."""
-        # Proactively login before first API call
+        # Learn the model before authenticating so newer devices can use the
+        # token-based auth flow.
+        result = await self.get_info()
+        self._update_auth_mode()
+
+        # Proactively login before the first authenticated API call.
         if not self.logged_in:
             _LOGGER.debug("[%s] Not logged in - logging in before init", self.log_id)
             await self.login()
@@ -138,7 +147,10 @@ class AlfenDevice:
                 _LOGGER.debug("[%s] Login failed - init cannot continue", self.log_id)
                 return False
 
-        result = await self.get_info()
+        if not result:
+            result = await self.get_info()
+            self._update_auth_mode()
+
         if not self.name and self.info:
             self.name = f"{self.info.identity} ({self.host})"
         self.id = f"alfen_{self.name}"
@@ -164,7 +176,11 @@ class AlfenDevice:
 
     async def get_info(self) -> bool:
         """Get info from the API."""
-        response = await self._session.get(url=self.__get_url(INFO), ssl=self.ssl)
+        response = await self._session.get(
+            url=self.__get_url(INFO),
+            headers=self._request_headers(),
+            ssl=self.ssl,
+        )
         _LOGGER.debug("[%s] Response %s", self.log_id, str(response))
 
         if response.status == 200:
@@ -183,6 +199,33 @@ class AlfenDevice:
         }
         self.info = AlfenDeviceInfo(generic_info)
         return False
+
+    def _update_auth_mode(self) -> None:
+        """Update the auth mode based on the discovered model ID."""
+        if self.info and self.info.model_id in NEW_AUTH_MAPPING:
+            if not self.uses_token_auth:
+                _LOGGER.debug(
+                    "[%s] Using token-based auth for model %s",
+                    self.log_id,
+                    self.info.model_id,
+                )
+            self.uses_token_auth = True
+        else:
+            self.uses_token_auth = False
+
+    def _request_headers(
+        self, include_json: bool = False, include_auth: bool = True
+    ) -> dict[str, str]:
+        """Build request headers for the current auth mode."""
+        headers: dict[str, str] = {}
+
+        if include_json:
+            headers.update(POST_HEADER_JSON)
+
+        if include_auth and self.uses_token_auth and self.logged_in and self.access_token:
+            headers["Authorization"] = f"Bearer {self.access_token}"
+
+        return headers
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -550,12 +593,15 @@ class AlfenDevice:
                 async with self._session.post(
                     url=self.__get_url(cmd),
                     json=payload,
-                    headers=POST_HEADER_JSON,
+                    headers=self._request_headers(include_json=True),
                     timeout=ClientTimeout(total=DEFAULT_TIMEOUT),
                     ssl=self.ssl,
                 ) as response:
                     if response.status == 401 and allowed_login:
                         self.logged_in = False
+                        if self.uses_token_auth:
+                            self.access_token = None
+                            self.refresh_token = None
                         _LOGGER.warning(
                             "[%s] POST returned 401 Unauthorized - connection may have been closed by wallbox",
                             self.log_id,
@@ -647,10 +693,16 @@ class AlfenDevice:
                     )
 
                 async with self._session.get(
-                    url, timeout=ClientTimeout(total=DEFAULT_TIMEOUT), ssl=self.ssl
+                    url,
+                    headers=self._request_headers(),
+                    timeout=ClientTimeout(total=DEFAULT_TIMEOUT),
+                    ssl=self.ssl,
                 ) as response:
                     if response.status == 401 and allowed_login:
                         self.logged_in = False
+                        if self.uses_token_auth:
+                            self.access_token = None
+                            self.refresh_token = None
                         _LOGGER.warning(
                             "[%s] GET returned 401 Unauthorized - connection may have been closed by wallbox",
                             self.log_id,
@@ -864,7 +916,7 @@ class AlfenDevice:
                             # Use friendly name (truncated to 32 chars) as session display name
                             PARAM_DISPLAY_NAME: self.name[:32] if self.name else "HomeAssistant",
                         },
-                        headers=POST_HEADER_JSON,
+                        headers=self._request_headers(include_json=True, include_auth=False),
                         timeout=ClientTimeout(total=DEFAULT_TIMEOUT),
                         ssl=self.ssl,
                     ) as http_response:
@@ -900,10 +952,24 @@ class AlfenDevice:
                     raise
 
             # Only set logged_in = True if we got here without exception
+            if self.uses_token_auth:
+                self.access_token = None
+                self.refresh_token = None
+                if isinstance(response, dict):
+                    self.access_token = response.get("access")
+                    self.refresh_token = response.get("refresh")
+                if not self.access_token:
+                    raise ValueError("Missing access token in login response")
+            else:
+                self.access_token = None
+                self.refresh_token = None
+
             self.logged_in = True
             self.last_updated = datetime.datetime.now()
 
-            if response is None:
+            if self.uses_token_auth:
+                _LOGGER.debug("[%s] Login successful with bearer token auth", self.log_id)
+            elif response is None:
                 _LOGGER.debug(
                     "[%s] Login successful (no response body or malformed JSON)",
                     self.log_id,
@@ -922,11 +988,9 @@ class AlfenDevice:
 
     async def logout(self):
         """Logout from the API."""
-        self.keep_logout = True
-
         try:
+            self.keep_logout = False
             response = await self._post(cmd=LOGOUT, allowed_login=False)
-            self.logged_in = False
             self.last_updated = datetime.datetime.now()
 
             if response is None:
@@ -937,9 +1001,8 @@ class AlfenDevice:
             else:
                 _LOGGER.debug("[%s] Logout successful: %s", self.log_id, response)
 
-            # Close the TCP connection after logout (connection-based auth)
-            # This ensures the wallbox knows we've disconnected and allows other clients to connect
-            if hasattr(self._session, "connector") and self._session.connector:
+            # Close the TCP connection after logout for the legacy connection-based auth flow.
+            if not self.uses_token_auth and hasattr(self._session, "connector") and self._session.connector:
                 # Close all connections in the connector (should only be 1)
                 await self._session.connector.close()
                 _LOGGER.debug("[%s] Closed TCP connection after logout", self.log_id)
@@ -950,7 +1013,11 @@ class AlfenDevice:
                 self.log_id,
                 self._sanitize_exception(e),
             )
-            return
+        finally:
+            self.logged_in = False
+            self.access_token = None
+            self.refresh_token = None
+            self.keep_logout = True
 
     async def _update_value(
         self, api_param: str, value: Any, allowed_login: bool = True
@@ -965,12 +1032,15 @@ class AlfenDevice:
                 async with self._session.post(
                     url=self.__get_url(PROP),
                     json={api_param: {ID: api_param, VALUE: str(value)}},
-                    headers=POST_HEADER_JSON,
+                    headers=self._request_headers(include_json=True),
                     timeout=ClientTimeout(total=DEFAULT_TIMEOUT),
                     ssl=self.ssl,
                 ) as response:
                     if response.status == 401 and allowed_login:
                         self.logged_in = False
+                        if self.uses_token_auth:
+                            self.access_token = None
+                            self.refresh_token = None
                         _LOGGER.debug(
                             "[%s] POST(Update) with login - will retry after lock release",
                             self.log_id,
