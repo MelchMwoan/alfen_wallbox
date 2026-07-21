@@ -157,8 +157,12 @@ ALFEN_PRODUCT_MAP = {
 
 # Model IDs that use the newer token-based authentication flow.
 NEW_AUTH_MAPPING = {
-    "AHP02-63026": "AHP EXPERIMENTAL: Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
+    "AHP02-63021": "AHP EXPERIMENTAL: Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
     "AHP02-63022": "AHP EXPERIMENTAL: Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
+    "AHP02-63023": "AHP EXPERIMENTAL: Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
+    "AHP02-63024": "AHP EXPERIMENTAL: Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
+    "AHP02-63025": "AHP EXPERIMENTAL: Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
+    "AHP02-63026": "AHP EXPERIMENTAL: Eve Double PLUS, 2 x type 2 socket, 3 phase, display",
 }
 
 LICENSE_NONE = "None"
